@@ -23,6 +23,7 @@ class PoECurrencyTests(unittest.TestCase):
                         "sell_avg": 950,
                         "currency_unit": "c",
                         "latest_datetime": "2026-10-15 15:00:00",
+                        "item_icon": "https://cdn.poedb.tw/image/Art/2DItems/Currency/DivineOrb.webp",
                     },
                     {
                         "item_name": "错误行情",
@@ -46,6 +47,10 @@ class PoECurrencyTests(unittest.TestCase):
         self.assertEqual(len(snapshot.prices), 1)
         self.assertEqual(snapshot.prices[0].name, "神圣石")
         self.assertEqual(snapshot.prices[0].currency_unit, "c")
+        self.assertEqual(
+            snapshot.prices[0].icon_url,
+            "https://cdn.poedb.tw/image/Art/2DItems/Currency/DivineOrb.webp",
+        )
         self.assertEqual(snapshot.latest_update, "2026-10-15 15:00:00")
 
     def test_summary_rejects_missing_currency_category(self):

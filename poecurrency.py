@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SUMMARY_URL = "https://poecurrency.top/api/summary?version=1"
-USER_AGENT = "AstrBot-PoE1DB/0.4.1 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
+USER_AGENT = "AstrBot-PoE1DB/0.4.2 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
 MAX_RESPONSE_BYTES = 2_500_000
 CURRENCY_NAMES = {"c": "混沌石", "e": "崇高石", "d": "神圣石"}
 
@@ -30,6 +30,7 @@ class NationalCurrencyPrice:
     sell_average: float
     currency_unit: str
     updated_at: str
+    icon_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,7 @@ def parse_national_summary(payload: object) -> NationalPriceSnapshot:
         ):
             continue
         updated_at = row.get("latest_datetime", "")
+        icon_url = row.get("item_icon")
         prices.append(
             NationalCurrencyPrice(
                 name=name.strip(),
@@ -110,6 +112,11 @@ def parse_national_summary(payload: object) -> NationalPriceSnapshot:
                 sell_average=sell_average,
                 currency_unit=unit,
                 updated_at=updated_at.strip() if isinstance(updated_at, str) else "",
+                icon_url=(
+                    icon_url.strip()
+                    if isinstance(icon_url, str) and len(icon_url.strip()) <= 2048
+                    else None
+                ),
             )
         )
     if not prices:

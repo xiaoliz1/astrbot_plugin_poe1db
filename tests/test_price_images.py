@@ -54,7 +54,15 @@ class PriceImageTests(unittest.TestCase):
         snapshot = NationalPriceSnapshot((
             NationalCurrencyPrice("神圣石", "Divine Orb", 12, 10, "d", "today"),
             NationalCurrencyPrice("崇高石", "Exalted Orb", 100, 95, "c", "today"),
-            NationalCurrencyPrice("卡兰德的魔镜", "Mirror of Kalandra", 5, 4, "d", "today"),
+            NationalCurrencyPrice(
+                "卡兰德的魔镜",
+                "Mirror of Kalandra",
+                5,
+                4,
+                "d",
+                "today",
+                "https://cdn.poedb.tw/image/Art/2DItems/Currency/CurrencyDuplicate.webp",
+            ),
             NationalCurrencyPrice("崇高石（神圣计价）", "Exalted Orb", 2, 1, "d", "today"),
             NationalCurrencyPrice("未匹配物品", "Unknown Relic", 1, 0.5, "d", "today"),
         ), "2026-10-15 17:00:00")
@@ -75,6 +83,10 @@ class PriceImageTests(unittest.TestCase):
         self.assertNotIn("按混沌石计价", html)
         self.assertIn("2026-10-15 17:00:00", html)
         self.assertIn('src="https://web.poecdn.com/gen/image/divine.png"', html)
+        self.assertIn(
+            'src="https://cdn.poedb.tw/image/Art/2DItems/Currency/CurrencyDuplicate.webp"',
+            html,
+        )
         self.assertIn("买入均价（神圣石）", html)
         self.assertIn(">12 神圣石</td>", html)
         self.assertNotIn("100 崇高石", html)

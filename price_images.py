@@ -31,11 +31,17 @@ def _icon_url(value: object) -> str | None:
     path = parts.path
     if any(segment in {".", ".."} or "\\" in segment for segment in map(unquote, path.split("/"))):
         return None
-    if parts.scheme != "https" or parts.hostname != "web.poecdn.com":
+    if parts.scheme != "https":
         return None
-    if not (path.startswith("/gen/image/") or path.startswith("/image/")):
+    if parts.hostname == "web.poecdn.com":
+        if not (path.startswith("/gen/image/") or path.startswith("/image/")):
+            return None
+    elif parts.hostname == "cdn.poedb.tw":
+        if not path.startswith("/image/Art/2DItems/"):
+            return None
+    else:
         return None
-    return "https://web.poecdn.com" + path
+    return f"https://{parts.hostname}" + path
 
 
 def _format(value: float) -> str:
@@ -176,6 +182,7 @@ def render_national_html(
     for price in selected_prices:
         key = re.sub(r"[^a-z0-9]", "", price.english_name.casefold())
         icon = icon_map.get(key)
+        icon = _icon_url(price.icon_url) or icon
         international_rank = rank_by_name.get(key)
         rank_label = (
             f"国际{international_rank + 1:02d}"
