@@ -123,7 +123,7 @@ def _completion_text(response: object) -> str:
     "astrbot_plugin_poe1db",
     "xiaoliz1",
     "流放之路1资料问答",
-    "0.4.2",
+    "0.4.3",
 )
 class Poe1DBPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -250,7 +250,7 @@ class Poe1DBPlugin(Star):
             self.economy.invalidate_cache()
             self.national_economy.invalidate_cache()
             international_result, national_result = await asyncio.gather(
-                self.economy.currency_snapshot(),
+                self.economy.item_snapshot(),
                 self.national_economy.currency_snapshot(),
                 return_exceptions=True,
             )
@@ -268,8 +268,8 @@ class Poe1DBPlugin(Star):
                 complete = False
 
             # Both charts depend on both snapshots: international prices gain
-            # Chinese labels from the national feed, while national ordering
-            # and icons use the international snapshot.
+            # Chinese labels from the national feed, while national rows may
+            # use a matching poe.ninja icon when the domestic feed lacks one.
             render_markets = (
                 [
                     market
@@ -325,7 +325,6 @@ class Poe1DBPlugin(Star):
             )
             html = render_national_html(
                 snapshot,
-                international if isinstance(international, PriceSnapshot) else None,
                 icons_by_name,
             )
         else:

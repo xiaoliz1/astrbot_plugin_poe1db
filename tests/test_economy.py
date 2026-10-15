@@ -33,44 +33,47 @@ class EconomyTests(unittest.TestCase):
         self.assertEqual(body, ["cached"])
         self.assertEqual(download.call_args.args, ("https://poe.ninja/poe1/api/economy/leagues", '"abc"'))
 
-    def test_currency_snapshot_reads_and_sorts_supported_categories(self):
+    def test_item_snapshot_reads_direct_divine_values_and_sorts_categories(self):
         async def scenario():
             client = EconomyClient()
             async def fake_league():
                 return "Mirage"
 
             async def fake_fetch(url):
-                    if "type=Currency" in url:
-                        return {
-                            "currencyDetails": [{
-                                "name": "Divine Orb",
-                                "icon": "https://web.poecdn.com/gen/image/divine.png",
-                            }],
-                            "lines": [
-                            {"currencyTypeName": "Divine Orb", "chaosEquivalent": 160,
-                             "receiveSparkLine": {"totalChange": 5, "data": [1, 2, 3]}},
-                            {"currencyTypeName": "Chaos Orb", "chaosEquivalent": 1},
-                            ]
-                        }
+                if "type=UniqueWeapon" in url:
                     return {"lines": [
-                        {"currencyTypeName": "Maven's Invitation", "chaosEquivalent": 12},
-                        {"currencyTypeName": "Bad", "chaosEquivalent": float("nan")},
+                        {
+                            "name": "Divine Priced Sword",
+                            "chaosValue": 1600,
+                            "divineValue": 10,
+                            "icon": "https://web.poecdn.com/gen/image/divine.png",
+                            "sparkLine": {"totalChange": 5, "data": [1, 2, 3]},
+                        },
+                        {"name": "Chaos Only Sword", "chaosValue": 500},
+                        {"name": "Zero Divine Sword", "chaosValue": 500, "divineValue": 0},
+                        {"name": "Invalid Divine Sword", "chaosValue": 500, "divineValue": float("nan")},
                     ]}
+                if "type=SkillGem" in url:
+                    return {"lines": [
+                        {"name": "Divine Priced Gem", "chaosValue": 400, "divineValue": 2.5},
+                    ]}
+                return {"lines": []}
 
             with patch.object(client, "current_league", new=fake_league):
                 with patch.object(client, "_fetch_json", new=fake_fetch):
-                    return await client.currency_snapshot()
+                    return await client.item_snapshot()
 
         snapshot = asyncio.run(scenario())
         self.assertEqual(snapshot.league, "Mirage")
         self.assertEqual(
             [price.name for price in snapshot.prices],
-            ["Divine Orb", "Maven's Invitation", "Chaos Orb"],
+            ["Divine Priced Sword", "Divine Priced Gem"],
         )
         self.assertEqual(snapshot.prices[0].icon_url, "https://web.poecdn.com/gen/image/divine.png")
-        self.assertEqual(snapshot.prices[0].category, "通货")
+        self.assertEqual(snapshot.prices[0].category, "传奇武器")
         self.assertEqual(snapshot.prices[0].change_percent, 5)
         self.assertEqual(snapshot.prices[0].trend, (1.0, 2.0, 3.0))
+        self.assertEqual(snapshot.prices[0].divine_value, 10)
 
     def test_invalidate_cache_expires_entries_without_discarding_etag(self):
         client = EconomyClient()

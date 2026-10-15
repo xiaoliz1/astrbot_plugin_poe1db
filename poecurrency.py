@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SUMMARY_URL = "https://poecurrency.top/api/summary?version=1"
-USER_AGENT = "AstrBot-PoE1DB/0.4.2 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
+USER_AGENT = "AstrBot-PoE1DB/0.4.3 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
 MAX_RESPONSE_BYTES = 2_500_000
 CURRENCY_NAMES = {"c": "混沌石", "e": "崇高石", "d": "神圣石"}
 

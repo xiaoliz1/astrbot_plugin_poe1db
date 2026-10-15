@@ -7,7 +7,7 @@ import math
 import re
 from urllib.parse import unquote, urlsplit
 
-from .economy import CurrencyPrice, PriceSnapshot
+from .economy import PriceSnapshot
 from .poecurrency import NationalPriceSnapshot
 
 IMAGE_ROWS = 50
@@ -108,22 +108,20 @@ def render_international_html(
             if key and _has_chinese(price.name):
                 chinese_names_by_english.setdefault(key, price.name)
 
-    divine_price = next(
+    ranked_prices = sorted(
         (
-            price.chaos_value
+            price
             for price in snapshot.prices
-            if re.sub(r"[^a-z0-9]", "", price.name.casefold()) in {"divineorb", "divine"}
-            and math.isfinite(price.chaos_value)
-            and price.chaos_value > 0
+            if isinstance(price.divine_value, (int, float))
+            and not isinstance(price.divine_value, bool)
+            and math.isfinite(price.divine_value)
+            and price.divine_value > 0
         ),
-        None,
+        key=lambda price: (-price.divine_value, price.name.casefold()),
     )
-    unit = "神圣石" if divine_price else "混沌石"
-    divisor = divine_price or 1.0
-    ranked_prices = sorted(snapshot.prices, key=lambda price: (-price.chaos_value, price.name))
+    unit = "神圣石"
     entries: list[str] = []
     for index, price in enumerate(ranked_prices[:IMAGE_ROWS], 1):
-        value = price.chaos_value / divisor
         display_name = chinese_names_by_english.get(
             _normalized_item_name(price.name), price.name
         )
@@ -135,7 +133,7 @@ def render_international_html(
             f'<td class="rank">{index:02d}</td>'
             f'<td class="category">{_safe(price.category)}</td>'
             f'<td class="item-col">{_name_cell(display_name, price.icon_url)}</td>'
-            f'<td class="value">{_format(value)} {_safe(unit)}</td>'
+            f'<td class="value">{_format(price.divine_value)} {_safe(unit)}</td>'
             f'<td class="trend"><span class="trend-inner">{_trend_svg(price.trend, change is not None and change >= 0)}'
             f'<span class="{change_class}">{change_text}</span></span></td>'
             "</tr>"
@@ -143,7 +141,7 @@ def render_international_html(
     table = f'<table><thead><tr><th class="rank">#</th><th>分类</th><th>物品</th><th>价格（{_safe(unit)}）</th><th>七日趋势</th></tr></thead><tbody>' + "".join(entries) + "</tbody></table>"
     return _document(
         "国际服物价表",
-        f"当前赛季：{snapshot.league} · 更新时间：{updated_at} · 以{unit}计价",
+        f"当前赛季：{snapshot.league} · 更新时间：{updated_at} · 仅显示 poe.ninja 接口直接提供神圣石价格的条目",
         table,
         min(len(ranked_prices), IMAGE_ROWS),
         "poe.ninja 公开经济 API",
@@ -152,46 +150,26 @@ def render_international_html(
 
 def render_national_html(
     snapshot: NationalPriceSnapshot,
-    international_snapshot: PriceSnapshot | None = None,
     icons_by_english_name: dict[str, str] | None = None,
 ) -> str:
     icon_map = icons_by_english_name or {}
-    ranked_international = (
-        sorted(
-            (price for price in international_snapshot.prices if isinstance(price, CurrencyPrice)),
-            key=lambda price: (-price.chaos_value, price.name.casefold()),
-        )
-        if international_snapshot
-        else []
-    )
-    rank_by_name = {
-        re.sub(r"[^a-z0-9]", "", price.name.casefold()): index
-        for index, price in enumerate(ranked_international)
-    }
     divine_prices = [price for price in snapshot.prices if price.currency_unit == "d"]
     divine_prices.sort(
         key=lambda price: (
-            0 if re.sub(r"[^a-z0-9]", "", price.english_name.casefold()) in rank_by_name else 1,
-            rank_by_name.get(re.sub(r"[^a-z0-9]", "", price.english_name.casefold()), 0),
-            -max(price.buy_average, price.sell_average),
+            -price.buy_average,
+            -price.sell_average,
             price.name.casefold(),
         )
     )
     selected_prices = divine_prices[:IMAGE_ROWS]
     entries: list[str] = []
-    for price in selected_prices:
+    for index, price in enumerate(selected_prices, 1):
         key = re.sub(r"[^a-z0-9]", "", price.english_name.casefold())
         icon = icon_map.get(key)
         icon = _icon_url(price.icon_url) or icon
-        international_rank = rank_by_name.get(key)
-        rank_label = (
-            f"国际{international_rank + 1:02d}"
-            if international_rank is not None
-            else "国服"
-        )
         entries.append(
             "<tr>"
-            f'<td class="rank">{rank_label}</td>'
+            f'<td class="rank">{index:02d}</td>'
             f'<td class="item-col">{_name_cell(price.name, icon)}</td>'
             f'<td class="value">{_format(price.buy_average)} 神圣石</td>'
             f'<td class="value">{_format(price.sell_average)} 神圣石</td>'
@@ -199,11 +177,11 @@ def render_national_html(
         )
     if not entries:
         entries.append('<tr><td colspan="4" class="empty">当前没有神圣石计价的国服行情</td></tr>')
-    table = '<table class="national"><thead><tr><th class="rank">排序来源</th><th>物品</th><th>买入均价（神圣石）</th><th>卖出均价（神圣石）</th></tr></thead><tbody>' + "".join(entries) + "</tbody></table>"
+    table = '<table class="national"><thead><tr><th class="rank">#</th><th>物品</th><th>买入均价（神圣石）</th><th>卖出均价（神圣石）</th></tr></thead><tbody>' + "".join(entries) + "</tbody></table>"
     updated_at = snapshot.latest_update or "接口未提供更新时间"
     return _document(
         "国服物价表",
-        f"PoE1 当前赛季 · 神圣石计价 · 匹配项按国际服价格排序，其余按国服神圣石报价排序 · 更新时间：{updated_at}",
+        f"PoE1 当前赛季 · 仅显示直接以神圣石计价的条目，按国服买入神圣石报价降序 · 更新时间：{updated_at}",
         table,
         len(selected_prices),
         "poecurrency.top 国服行情（OCR 采集）",

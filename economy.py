@@ -13,8 +13,39 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 BASE_URL = "https://poe.ninja/poe1/api/economy"
-USER_AGENT = "AstrBot-PoE1DB/0.4.2 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
+USER_AGENT = "AstrBot-PoE1DB/0.4.3 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
 MAX_RESPONSE_BYTES = 2_500_000
+
+ITEM_CATEGORIES = {
+    "Wombgift": "胎礼",
+    "Corpse": "尸体",
+    "Incubator": "孵化器",
+    "UniqueWeapon": "传奇武器",
+    "UniqueArmour": "传奇护甲",
+    "UniqueAccessory": "传奇饰品",
+    "UniqueFlask": "传奇药剂",
+    "UniqueJewel": "传奇珠宝",
+    "ForbiddenJewel": "禁断珠宝",
+    "ShrineBelt": "神龛腰带",
+    "UniqueTincture": "传奇滴剂",
+    "UniqueRelic": "传奇遗物",
+    "SkillGem": "技能宝石",
+    "ImbuedGem": "灌注宝石",
+    "ClusterJewel": "星团珠宝",
+    "Map": "地图",
+    "BlightedMap": "凋落地图",
+    "BlightRavagedMap": "凋落蔓延地图",
+    "UniqueMap": "传奇地图",
+    "ValdoMap": "瓦尔多地图",
+    "Invitation": "邀请",
+    "Memory": "记忆",
+    "IncursionTemple": "神庙",
+    "ScryingOrb": "预言之镜",
+    "BaseType": "基底",
+    "Flask": "药剂",
+    "Beast": "野兽",
+    "Vial": "圣物瓶",
+}
 
 
 class EconomyError(RuntimeError):
@@ -29,6 +60,7 @@ class CurrencyPrice:
     category: str = "通货"
     change_percent: float | None = None
     trend: tuple[float, ...] = ()
+    divine_value: float | None = None
 
 
 @dataclass(frozen=True)
@@ -69,7 +101,7 @@ class EconomyClient:
         self.timeout_seconds = timeout_seconds
         self.cache_seconds = cache_seconds
         self._cache: dict[str, tuple[float, object, str | None]] = {}
-        self._lock = asyncio.Lock()
+        self._url_locks: dict[str, asyncio.Lock] = {}
 
     def invalidate_cache(self) -> None:
         """Expire cached responses while retaining ETags for conditional refreshes."""
@@ -115,7 +147,8 @@ class EconomyClient:
         cached = self._cache.get(url)
         if cached and cached[0] > time.monotonic():
             return cached[1]
-        async with self._lock:
+        lock = self._url_locks.setdefault(url, asyncio.Lock())
+        async with lock:
             cached = self._cache.get(url)
             if cached and cached[0] > time.monotonic():
                 return cached[1]
@@ -149,73 +182,93 @@ class EconomyClient:
                     return league_id.strip()
         raise EconomyError("poe.ninja 暂未返回可用赛季")
 
-    async def currency_snapshot(self) -> PriceSnapshot:
+    async def item_snapshot(self) -> PriceSnapshot:
         league = await self.current_league()
-        prices: dict[str, float] = {}
-        price_metadata: dict[str, tuple[str | None, str, float | None, tuple[float, ...]]] = {}
-        for category in ("Currency", "Fragment"):
+        categories = tuple(ITEM_CATEGORIES)
+
+        async def fetch_category(category: str) -> tuple[str, object | Exception]:
             query = urlencode({"league": league, "type": category})
-            payload = await self._fetch_json(
-                f"{BASE_URL}/stash/current/currency/overview?{query}"
+            url = f"{BASE_URL}/stash/current/item/overview?{query}"
+            try:
+                return category, await self._fetch_json(url)
+            except Exception as exc:
+                return category, exc
+
+        # Keep concurrency modest while covering all documented PoE 1 item
+        # categories. One unavailable category should not discard the others.
+        responses: list[tuple[str, object | Exception]] = []
+        for start in range(0, len(categories), 4):
+            responses.extend(
+                await asyncio.gather(
+                    *(fetch_category(category) for category in categories[start : start + 4])
+                )
             )
-            if not isinstance(payload, dict):
+
+        prices: list[CurrencyPrice] = []
+        for category, payload in responses:
+            if isinstance(payload, Exception) or not isinstance(payload, dict):
                 continue
-            details = payload.get("currencyDetails")
-            icons_by_name = {
-                detail.get("name", "").strip().casefold(): detail.get("icon")
-                for detail in details
-                if isinstance(detail, dict)
-                and isinstance(detail.get("name"), str)
-                and isinstance(detail.get("icon"), str)
-            } if isinstance(details, list) else {}
             rows = payload.get("lines")
             if not isinstance(rows, list):
                 continue
             for row in rows:
                 if not isinstance(row, dict):
                     continue
-                name = row.get("currencyTypeName")
-                value = row.get("chaosEquivalent")
+                name = row.get("name")
+                divine_value = row.get("divineValue")
+                chaos_value = row.get("chaosValue")
+                icon = row.get("icon")
                 if (
-                    isinstance(name, str)
-                    and name.strip()
-                    and isinstance(value, (int, float))
-                    and not isinstance(value, bool)
-                    and math.isfinite(float(value))
-                    and float(value) > 0
+                    not isinstance(name, str)
+                    or not name.strip()
+                    or isinstance(divine_value, bool)
+                    or not isinstance(divine_value, (int, float))
+                    or not math.isfinite(float(divine_value))
+                    or float(divine_value) <= 0
                 ):
-                    prices[name.strip()] = float(value)
-                    icon = icons_by_name.get(name.strip().casefold())
-                    sparkline = row.get("receiveSparkLine")
-                    change = None
-                    trend: tuple[float, ...] = ()
-                    if isinstance(sparkline, dict):
-                        raw_change = sparkline.get("totalChange")
-                        if (
-                            isinstance(raw_change, (int, float))
-                            and not isinstance(raw_change, bool)
-                            and math.isfinite(float(raw_change))
-                        ):
-                            change = float(raw_change)
-                        raw_trend = sparkline.get("data")
-                        if isinstance(raw_trend, list):
-                            trend = tuple(
-                                float(point)
-                                for point in raw_trend
-                                if isinstance(point, (int, float))
-                                and not isinstance(point, bool)
-                                and math.isfinite(float(point))
-                            )
-                    price_metadata[name.strip()] = (
-                        icon if isinstance(icon, str) else None,
-                        "碎片" if category == "Fragment" else "通货",
-                        change,
-                        trend,
-                    )
+                    continue
+                chaos = (
+                    float(chaos_value)
+                    if isinstance(chaos_value, (int, float))
+                    and not isinstance(chaos_value, bool)
+                    and math.isfinite(float(chaos_value))
+                    and float(chaos_value) >= 0
+                    else 0.0
+                )
+                sparkline = row.get("sparkLine")
+                change = None
+                trend: tuple[float, ...] = ()
+                if isinstance(sparkline, dict):
+                    raw_change = sparkline.get("totalChange")
+                    if (
+                        isinstance(raw_change, (int, float))
+                        and not isinstance(raw_change, bool)
+                        and math.isfinite(float(raw_change))
+                    ):
+                        change = float(raw_change)
+                    raw_trend = sparkline.get("data")
+                    if isinstance(raw_trend, list):
+                        trend = tuple(
+                            float(point)
+                            for point in raw_trend
+                            if isinstance(point, (int, float))
+                            and not isinstance(point, bool)
+                            and math.isfinite(float(point))
+                        )
+                item = CurrencyPrice(
+                    name=name.strip(),
+                    chaos_value=chaos,
+                    icon_url=icon if isinstance(icon, str) else None,
+                    category=ITEM_CATEGORIES[category],
+                    change_percent=change,
+                    trend=trend,
+                    divine_value=float(divine_value),
+                )
+                prices.append(item)
+
         if not prices:
-            raise EconomyError("当前赛季暂时没有可用的通货价格")
+            raise EconomyError("当前赛季暂时没有可用的神圣石直接计价物品")
         sorted_prices = tuple(
-            CurrencyPrice(name, value, *price_metadata.get(name, (None, "通货", None, ())))
-            for name, value in sorted(prices.items(), key=lambda pair: (-pair[1], pair[0]))
+            sorted(prices, key=lambda price: (-(price.divine_value or 0), price.name.casefold()))
         )
         return PriceSnapshot(league=league, prices=sorted_prices)
