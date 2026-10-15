@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SUMMARY_URL = "https://poecurrency.top/api/summary?version=1"
-USER_AGENT = "AstrBot-PoE1DB/0.2.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
+USER_AGENT = "AstrBot-PoE1DB/0.3.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
 MAX_RESPONSE_BYTES = 2_500_000
 CURRENCY_NAMES = {"c": "混沌石", "e": "崇高石", "d": "神圣石"}
 
@@ -124,6 +124,11 @@ class NationalEconomyClient:
         self.cache_seconds = cache_seconds
         self._cache: tuple[float, NationalPriceSnapshot] | None = None
         self._lock = asyncio.Lock()
+
+    def invalidate_cache(self) -> None:
+        """Expire the cached snapshot so manual/hourly refreshes fetch fresh data."""
+        if self._cache is not None:
+            self._cache = (0.0, self._cache[1])
 
     def _download(self) -> object:
         if not _valid_summary_url(SUMMARY_URL):

@@ -13,7 +13,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 BASE_URL = "https://poe.ninja/poe1/api/economy"
-USER_AGENT = "AstrBot-PoE1DB/0.1.0 (+https://github.com/xiaoliz1)"
+USER_AGENT = "AstrBot-PoE1DB/0.3.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
 MAX_RESPONSE_BYTES = 2_500_000
 
 
@@ -25,6 +25,10 @@ class EconomyError(RuntimeError):
 class CurrencyPrice:
     name: str
     chaos_value: float
+    icon_url: str | None = None
+    category: str = "通货"
+    change_percent: float | None = None
+    trend: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,11 @@ class EconomyClient:
         self.cache_seconds = cache_seconds
         self._cache: dict[str, tuple[float, object, str | None]] = {}
         self._lock = asyncio.Lock()
+
+    def invalidate_cache(self) -> None:
+        """Expire cached responses while retaining ETags for conditional refreshes."""
+        for url, (_, payload, etag) in tuple(self._cache.items()):
+            self._cache[url] = (0.0, payload, etag)
 
     def _download_json(
         self, url: str, etag: str | None
@@ -143,6 +152,7 @@ class EconomyClient:
     async def currency_snapshot(self) -> PriceSnapshot:
         league = await self.current_league()
         prices: dict[str, float] = {}
+        price_metadata: dict[str, tuple[str | None, str, float | None, tuple[float, ...]]] = {}
         for category in ("Currency", "Fragment"):
             query = urlencode({"league": league, "type": category})
             payload = await self._fetch_json(
@@ -150,6 +160,14 @@ class EconomyClient:
             )
             if not isinstance(payload, dict):
                 continue
+            details = payload.get("currencyDetails")
+            icons_by_name = {
+                detail.get("name", "").strip().casefold(): detail.get("icon")
+                for detail in details
+                if isinstance(detail, dict)
+                and isinstance(detail.get("name"), str)
+                and isinstance(detail.get("icon"), str)
+            } if isinstance(details, list) else {}
             rows = payload.get("lines")
             if not isinstance(rows, list):
                 continue
@@ -167,10 +185,37 @@ class EconomyClient:
                     and float(value) > 0
                 ):
                     prices[name.strip()] = float(value)
+                    icon = icons_by_name.get(name.strip().casefold())
+                    sparkline = row.get("receiveSparkLine")
+                    change = None
+                    trend: tuple[float, ...] = ()
+                    if isinstance(sparkline, dict):
+                        raw_change = sparkline.get("totalChange")
+                        if (
+                            isinstance(raw_change, (int, float))
+                            and not isinstance(raw_change, bool)
+                            and math.isfinite(float(raw_change))
+                        ):
+                            change = float(raw_change)
+                        raw_trend = sparkline.get("data")
+                        if isinstance(raw_trend, list):
+                            trend = tuple(
+                                float(point)
+                                for point in raw_trend
+                                if isinstance(point, (int, float))
+                                and not isinstance(point, bool)
+                                and math.isfinite(float(point))
+                            )
+                    price_metadata[name.strip()] = (
+                        icon if isinstance(icon, str) else None,
+                        "碎片" if category == "Fragment" else "通货",
+                        change,
+                        trend,
+                    )
         if not prices:
             raise EconomyError("当前赛季暂时没有可用的通货价格")
         sorted_prices = tuple(
-            CurrencyPrice(name, value)
+            CurrencyPrice(name, value, *price_metadata.get(name, (None, "通货", None, ())))
             for name, value in sorted(prices.items(), key=lambda pair: (-pair[1], pair[0]))
         )
         return PriceSnapshot(league=league, prices=sorted_prices)

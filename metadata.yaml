@@ -1,7 +1,7 @@
 name: astrbot_plugin_poe1db
 display_name: 流放之路1资料问答
-short_desc: 查询 PoE Wiki 资料、PoE1 双服行情和 poe.ninja 角色 Builds 详情。
-desc: /poe1 问题会搜索 PoE Wiki 并由当前聊天模型用简体中文整理；/poe1search 直接搜索英文词条；国际服物价读取 poe.ninja 公开经济 API，国服物价读取 poecurrency.top POE1 当前赛季汇总；/poe1bd 在公开 Builds 搜索角色并返回匹配的详情链接。
-version: v0.2.0
+short_desc: 查询 PoE Wiki 资料、双服物价图片和 poe.ninja 角色 Builds 详情。
+desc: /poe1 问题会搜索 PoE Wiki 并由当前聊天模型用简体中文整理；/poe1search 直接搜索英文词条；/poe1 国际服物价与 /poe1 国服物价发送后台生成的行情图片，支持每小时采集、手动刷新和定时群通知；/poe1bd 搜索公开 Builds 并返回角色详情链接。
+version: v0.3.0
 author: xiaoliz1
 astrbot_version: ">=4.24.2,<5"
