@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
@@ -26,6 +28,7 @@ from .poecurrency import (
 from .wiki import WikiClient, WikiError, WikiPage
 from .price_image_store import PriceImageStore
 from .price_images import render_international_html, render_national_html
+from .poedb_names import PoEDBNameClient, normalize_english_name
 from .price_notifications import (
     group_umo_parts,
     ready_price_requests,
@@ -123,7 +126,7 @@ def _completion_text(response: object) -> str:
     "astrbot_plugin_poe1db",
     "xiaoliz1",
     "流放之路1资料问答",
-    "0.4.4",
+    "0.4.5",
 )
 class Poe1DBPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -138,6 +141,8 @@ class Poe1DBPlugin(Star):
         self.build_timeout = timeout
         self._price_snapshots: dict[str, object] = {}
         data_dir = StarTools.get_data_dir("astrbot_plugin_poe1db")
+        self.poedb_name_client = PoEDBNameClient(Path(data_dir) / "poedb-name-cache.json")
+        self._poedb_names_by_english: dict[str, str] = {}
         self._price_image_store = PriceImageStore(data_dir)
         self._price_images = dict(self._price_image_store.images)
         self._price_image_updated_at = dict(self._price_image_store.updated_at)
@@ -267,6 +272,41 @@ class Poe1DBPlugin(Star):
                 self._warn_price_refresh("国服", national_result)
                 complete = False
 
+            international = self._price_snapshots.get("international")
+            if isinstance(international, PriceSnapshot):
+                national = self._price_snapshots.get("national")
+                known_names = (
+                    {
+                        normalize_english_name(price.english_name)
+                        for price in national.prices
+                        if price.english_name
+                    }
+                    if isinstance(national, NationalPriceSnapshot)
+                    else set()
+                )
+                ranked_prices = sorted(
+                    (
+                        price
+                        for price in international.prices
+                        if isinstance(price.divine_value, (int, float))
+                        and not isinstance(price.divine_value, bool)
+                        and math.isfinite(price.divine_value)
+                        and price.divine_value > 0
+                    ),
+                    key=lambda price: (-price.divine_value, price.name.casefold()),
+                )[:50]
+                missing_names = [
+                    price.name
+                    for price in ranked_prices
+                    if normalize_english_name(price.name) not in known_names
+                ]
+                try:
+                    self._poedb_names_by_english = await self.poedb_name_client.resolve_names(
+                        missing_names
+                    )
+                except Exception as exc:
+                    self._warn_price_refresh("PoEDB 中文物品名", exc)
+
             # Both charts depend on both snapshots: international prices gain
             # Chinese labels from the national feed, while national rows may
             # use a matching poe.ninja icon when the domestic feed lacks one.
@@ -311,6 +351,7 @@ class Poe1DBPlugin(Star):
                 snapshot,
                 self._price_local_timestamp(),
                 national if isinstance(national, NationalPriceSnapshot) else None,
+                self._poedb_names_by_english,
             )
         elif market == "national" and isinstance(snapshot, NationalPriceSnapshot):
             international = self._price_snapshots.get("international")

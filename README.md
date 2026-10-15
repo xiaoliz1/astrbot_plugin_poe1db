@@ -20,7 +20,7 @@
 - `/poe1`：显示指令用法。
 - `/poe1 问题`：把问题转换为 PoE Wiki 搜索词，读取相关页面，再由当前聊天模型以简体中文简短回答并附来源；若多个相近词条都可能符合，会先列出候选项供选择，60 秒内回复编号即可，也可回复“取消”。有可用词条图片时会附图。
 - `/poe1search 英文词条`：直接搜索 PoE Wiki，不调用聊天模型，返回摘要和页面链接；若站点提供词条图片，会附上首个匹配图片。
-- `/poe1 国际服物价`：发送后台生成的当前赛季价格图片，只保留 poe.ninja API 直接提供有效 `divineValue` 的条目，按神圣石价格降序显示前 50 项，并显示接口返回的分类、物品图标和七日趋势；物品名称会按 poecurrency.top 的英文名称映射补充简体中文，未匹配到中文名时保留 poe.ninja 原名。
+- `/poe1 国际服物价`：发送后台生成的当前赛季价格图片，只保留 poe.ninja API 直接提供有效 `divineValue` 的条目，按神圣石价格降序显示前 50 项，并显示接口返回的分类、物品图标和七日趋势；物品名称优先匹配国服接口中的简体中文，未匹配项再查询 PoEDB 简中页面标题并缓存；PoEDB 没有独立中文物品页的瓦尔多地图等固定名称使用插件内的简中补充名称。
 - `/poe1 国服物价`：发送后台生成的国服行情图片，遍历 poecurrency.top 汇总接口的全部物品分类，只保留 `currency_unit=d`（直接以神圣石计价）的条目，按国服买入均价降序显示前 50 项；图片显示分类、国服中文物品名、国服 API 提供的物品图标（缺失时尝试匹配国际服图标）及买卖均价。
 - `/poe1bd 角色名`：在 poe.ninja 当前赛季公开 Builds 页搜索精确角色名，只返回唯一匹配角色的详情页链接；没有唯一公开匹配时说明未找到。
 
@@ -33,7 +33,7 @@ PoE1 问答目前以 Path of Exile Wiki 为资料源；它没有 PoE2 的 Poe2DB
 ## 数据与隐私
 
 - PoE Wiki 请求通过其公开 MediaWiki API 完成，插件限制访问 `www.poewiki.net`，并使用短期内存缓存；词条缩略图仅接受该站 HTTPS 图片地址。
-- 国际服物价仅请求 poe.ninja 文档列明的 PoE1 经济接口，遵守服务端缓存时间并使用 ETag 条件请求；国服物价读取 `poecurrency.top` 的 `version=1` 当前赛季汇总接口并缓存一小时。
+- 国际服价格和图标仅请求 poe.ninja 文档列明的 PoE1 经济接口，遵守服务端缓存时间并使用 ETag 条件请求；国服物价读取 `poecurrency.top` 的 `version=1` 当前赛季汇总接口并缓存一小时。国际服缺失中文名称时按需请求对应 PoEDB 简中页面标题，并在插件数据目录缓存 30 天；未找到中文页的名称缓存 12 小时后重试。
 - `poecurrency.top` 标注其国服行情由 OCR 采集，数据可能出现识别偏差；该站服务仅供个人非商业使用。
 - 国际服和国服物价图片由 AstrBot HTML 渲染生成；接口或图片生成失败时会保留上一张成功图片。
 - 问答会将玩家问题及检索到的公开 Wiki 摘要交给 AstrBot 当前会话模型；`/poe1search`、物价和 Builds 链接命令不调用聊天模型。
@@ -43,5 +43,6 @@ PoE1 问答目前以 Path of Exile Wiki 为资料源；它没有 PoE2 的 Poe2DB
 - [Path of Exile Wiki](https://www.poewiki.net/wiki/Path_of_Exile_Wiki)
 - [Path of Exile Wiki 数据查询 API](https://www.poewiki.net/wiki/Path_of_Exile_Wiki:Data_query_API)
 - [poe.ninja API 文档](https://poe.ninja/docs/api)
+- [PoEDB 简体中文物品资料](https://poedb.tw/cn/)
 - [poe.ninja PoE1 Builds](https://poe.ninja/poe1/builds)
 - [poecurrency.top API 文档](https://poecurrency.top/api.html)

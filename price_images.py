@@ -100,6 +100,7 @@ def render_international_html(
     snapshot: PriceSnapshot,
     updated_at: str,
     national_snapshot: NationalPriceSnapshot | None = None,
+    poedb_names_by_english: dict[str, str] | None = None,
 ) -> str:
     chinese_names_by_english: dict[str, str] = {}
     if isinstance(national_snapshot, NationalPriceSnapshot):
@@ -107,6 +108,10 @@ def render_international_html(
             key = _normalized_item_name(price.english_name)
             if key and _has_chinese(price.name):
                 chinese_names_by_english.setdefault(key, price.name)
+    if poedb_names_by_english:
+        for key, name in poedb_names_by_english.items():
+            if key and _has_chinese(name):
+                chinese_names_by_english[key] = name
 
     ranked_prices = sorted(
         (
@@ -144,7 +149,7 @@ def render_international_html(
         f"当前赛季：{snapshot.league} · 更新时间：{updated_at} · 仅显示 poe.ninja 接口直接提供神圣石价格的条目",
         table,
         min(len(ranked_prices), IMAGE_ROWS),
-        "poe.ninja 公开经济 API",
+        "poe.ninja 公开经济 API（价格/图标） · PoEDB 简中名称",
     )
 
 

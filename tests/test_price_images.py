@@ -18,11 +18,16 @@ class PriceImageTests(unittest.TestCase):
             NationalCurrencyPrice("Unmatched Relic", "Unmatched Relic", 1, 1, "c", "today"),
         ), "today")
 
-        html = render_international_html(international, "now", national)
+        html = render_international_html(
+            international,
+            "now",
+            national,
+            {"unmatchedrelic": "未匹配圣物"},
+        )
 
         self.assertIn("神圣石</span>", html)
         self.assertIn("裂隙宝珠</span>", html)
-        self.assertIn("Unmatched Relic</span>", html)
+        self.assertIn("未匹配圣物</span>", html)
         self.assertIn('src="https://web.poecdn.com/gen/image/divine.png"', html)
         self.assertIn("1 神圣石", html)
         self.assertIn("0.5 神圣石", html)

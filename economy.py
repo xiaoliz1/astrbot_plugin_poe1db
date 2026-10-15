@@ -13,7 +13,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 BASE_URL = "https://poe.ninja/poe1/api/economy"
-USER_AGENT = "AstrBot-PoE1DB/0.4.4 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
+USER_AGENT = "AstrBot-PoE1DB/0.4.5 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
 MAX_RESPONSE_BYTES = 2_500_000
 
 ITEM_CATEGORIES = {
