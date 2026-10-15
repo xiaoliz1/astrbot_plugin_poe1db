@@ -123,7 +123,7 @@ def _completion_text(response: object) -> str:
     "astrbot_plugin_poe1db",
     "xiaoliz1",
     "流放之路1资料问答",
-    "0.4.0",
+    "0.4.1",
 )
 class Poe1DBPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -267,11 +267,26 @@ class Poe1DBPlugin(Star):
                 self._warn_price_refresh("国服", national_result)
                 complete = False
 
+            # Both charts depend on both snapshots: international prices gain
+            # Chinese labels from the national feed, while national ordering
+            # and icons use the international snapshot.
+            render_markets = (
+                [
+                    market
+                    for market, snapshot_type in (
+                        ("international", PriceSnapshot),
+                        ("national", NationalPriceSnapshot),
+                    )
+                    if isinstance(self._price_snapshots.get(market), snapshot_type)
+                ]
+                if updated_markets
+                else []
+            )
             render_results = await asyncio.gather(
-                *(self._render_price_image(market) for market in updated_markets),
+                *(self._render_price_image(market) for market in render_markets),
                 return_exceptions=True,
             )
-            for market, image_path in zip(updated_markets, render_results):
+            for market, image_path in zip(render_markets, render_results):
                 if isinstance(image_path, str) and image_path:
                     try:
                         persisted_path = self._price_image_store.save_replacement(
@@ -291,7 +306,12 @@ class Poe1DBPlugin(Star):
     async def _render_price_image(self, market: str) -> str | None:
         snapshot = self._price_snapshots.get(market)
         if market == "international" and isinstance(snapshot, PriceSnapshot):
-            html = render_international_html(snapshot, self._price_local_timestamp())
+            national = self._price_snapshots.get("national")
+            html = render_international_html(
+                snapshot,
+                self._price_local_timestamp(),
+                national if isinstance(national, NationalPriceSnapshot) else None,
+            )
         elif market == "national" and isinstance(snapshot, NationalPriceSnapshot):
             international = self._price_snapshots.get("international")
             icons_by_name = (
@@ -303,7 +323,6 @@ class Poe1DBPlugin(Star):
                 if isinstance(international, PriceSnapshot)
                 else {}
             )
-            international = self._price_snapshots.get("international")
             html = render_national_html(
                 snapshot,
                 international if isinstance(international, PriceSnapshot) else None,

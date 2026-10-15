@@ -6,6 +6,27 @@ from astrbot_plugin_poe1db.price_images import render_international_html, render
 
 
 class PriceImageTests(unittest.TestCase):
+    def test_international_image_uses_national_translation_for_matching_names(self):
+        international = PriceSnapshot("Mirage", (
+            CurrencyPrice("Divine Orb", 1000, "https://web.poecdn.com/gen/image/divine.png"),
+            CurrencyPrice("Fracturing Orb", 500),
+            CurrencyPrice("Unmatched Relic", 10),
+        ))
+        national = NationalPriceSnapshot((
+            NationalCurrencyPrice("神圣石", "Divine Orb", 12, 10, "c", "today"),
+            NationalCurrencyPrice("裂隙宝珠", "Fracturing Orb", 9, 8, "d", "today"),
+            NationalCurrencyPrice("Unmatched Relic", "Unmatched Relic", 1, 1, "c", "today"),
+        ), "today")
+
+        html = render_international_html(international, "now", national)
+
+        self.assertIn("神圣石</span>", html)
+        self.assertIn("裂隙宝珠</span>", html)
+        self.assertIn("Unmatched Relic</span>", html)
+        self.assertIn('src="https://web.poecdn.com/gen/image/divine.png"', html)
+        self.assertIn("1 神圣石", html)
+        self.assertIn("0.5 神圣石", html)
+
     def test_international_image_escapes_names_shows_icons_and_limits_rows(self):
         rows = (CurrencyPrice("Divine Orb", 1000, change_percent=5, trend=(1, 2, 3)),) + tuple(
             CurrencyPrice(f"Orb {index}", 100 - index, "https://web.poecdn.com/gen/image/example.png")

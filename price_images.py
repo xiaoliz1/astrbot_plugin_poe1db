@@ -50,6 +50,14 @@ def _name_cell(name: str, icon_url: str | None = None) -> str:
     return f'<span class="item">{image}<span>{_safe(name)}</span></span>'
 
 
+def _normalized_item_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", name.casefold())
+
+
+def _has_chinese(text: str) -> bool:
+    return any("\u3400" <= char <= "\u9fff" for char in text)
+
+
 def _trend_svg(values: tuple[float, ...], positive: bool) -> str:
     points = tuple(value for value in values if math.isfinite(value))
     if len(points) < 2:
@@ -82,7 +90,18 @@ td{{height:39px;padding:6px 11px;border-bottom:1px solid #2c3d4a;white-space:now
 </style></head><body><main class="card"><div class="eyebrow">PATH OF EXILE 1 · ECONOMY</div><h1>{_safe(title)}</h1><p class="meta">{_safe(subtitle)}</p><p class="count">按价格排序 · 显示 {count} 项</p>{table}<p class="foot">数据来源：{_safe(source)} · 图片由 AstrBot 后台定时生成</p></main></body></html>'''
 
 
-def render_international_html(snapshot: PriceSnapshot, updated_at: str) -> str:
+def render_international_html(
+    snapshot: PriceSnapshot,
+    updated_at: str,
+    national_snapshot: NationalPriceSnapshot | None = None,
+) -> str:
+    chinese_names_by_english: dict[str, str] = {}
+    if isinstance(national_snapshot, NationalPriceSnapshot):
+        for price in national_snapshot.prices:
+            key = _normalized_item_name(price.english_name)
+            if key and _has_chinese(price.name):
+                chinese_names_by_english.setdefault(key, price.name)
+
     divine_price = next(
         (
             price.chaos_value
@@ -99,6 +118,9 @@ def render_international_html(snapshot: PriceSnapshot, updated_at: str) -> str:
     entries: list[str] = []
     for index, price in enumerate(ranked_prices[:IMAGE_ROWS], 1):
         value = price.chaos_value / divisor
+        display_name = chinese_names_by_english.get(
+            _normalized_item_name(price.name), price.name
+        )
         change = price.change_percent
         change_text = "—" if change is None else f"{change:+.1f}%"
         change_class = "flat" if change is None else ("up" if change >= 0 else "down")
@@ -106,7 +128,7 @@ def render_international_html(snapshot: PriceSnapshot, updated_at: str) -> str:
             "<tr>"
             f'<td class="rank">{index:02d}</td>'
             f'<td class="category">{_safe(price.category)}</td>'
-            f'<td class="item-col">{_name_cell(price.name, price.icon_url)}</td>'
+            f'<td class="item-col">{_name_cell(display_name, price.icon_url)}</td>'
             f'<td class="value">{_format(value)} {_safe(unit)}</td>'
             f'<td class="trend"><span class="trend-inner">{_trend_svg(price.trend, change is not None and change >= 0)}'
             f'<span class="{change_class}">{change_text}</span></span></td>'
