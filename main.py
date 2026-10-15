@@ -126,7 +126,7 @@ def _completion_text(response: object) -> str:
     "astrbot_plugin_poe1db",
     "xiaoliz1",
     "流放之路1资料问答",
-    "0.4.5",
+    "0.4.6",
 )
 class Poe1DBPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -255,7 +255,7 @@ class Poe1DBPlugin(Star):
             self.economy.invalidate_cache()
             self.national_economy.invalidate_cache()
             international_result, national_result = await asyncio.gather(
-                self.economy.item_snapshot(),
+                self.economy.currency_snapshot(),
                 self.national_economy.currency_snapshot(),
                 return_exceptions=True,
             )
@@ -307,9 +307,9 @@ class Poe1DBPlugin(Star):
                 except Exception as exc:
                     self._warn_price_refresh("PoEDB 中文物品名", exc)
 
-            # Both charts depend on both snapshots: international prices gain
-            # Chinese labels from the national feed, while national rows may
-            # use a matching poe.ninja icon when the domestic feed lacks one.
+            # International currency prices gain Chinese labels from matched
+            # domestic names / bilingual PoEDB pages; national rows can use
+            # poe.ninja icons when the domestic feed lacks one.
             render_markets = (
                 [
                     market

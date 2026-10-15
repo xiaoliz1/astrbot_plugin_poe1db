@@ -146,10 +146,10 @@ def render_international_html(
     table = f'<table><thead><tr><th class="rank">#</th><th>分类</th><th>物品</th><th>价格（{_safe(unit)}）</th><th>七日趋势</th></tr></thead><tbody>' + "".join(entries) + "</tbody></table>"
     return _document(
         "国际服物价表",
-        f"当前赛季：{snapshot.league} · 更新时间：{updated_at} · 仅显示 poe.ninja 接口直接提供神圣石价格的条目",
+        f"当前赛季：{snapshot.league} · Currency 行情按 poe.ninja 汇率折算为神圣石 · 更新时间：{updated_at}",
         table,
         min(len(ranked_prices), IMAGE_ROWS),
-        "poe.ninja 公开经济 API（价格/图标） · PoEDB 简中名称",
+        "poe.ninja Currency Exchange API（价格/图标） · PoEDB 中英文页面核对名称",
     )
 
 

@@ -13,34 +13,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
-BASE_URL = "https://poedb.tw/cn/"
-USER_AGENT = "AstrBot-PoE1DB/0.4.5 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
+USER_AGENT = "AstrBot-PoE1DB/0.4.6 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
 MAX_RESPONSE_BYTES = 1_500_000
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 CACHE_MAX_ENTRIES = 1_000
 CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 NEGATIVE_CACHE_TTL_SECONDS = 12 * 60 * 60
-LOCALIZED_FALLBACKS = {
-    # These generated Valdo-map rewards have no dedicated localized item page on PoEDB.
-    "secludedziggurat": "幽隐金字塔",
-    "forgottenpool": "遗忘之池",
-    "ancestralrefuge": "先祖庇护所",
-    "destinylake": "命运之湖",
-    "hiddencorridors": "隐秘回廊",
-    "ancestralrealm": "先祖领域",
-    "ghastlyfrontier": "幽怖边境",
-    "tempestuouspanorama": "风暴全景",
-    "demoncrate": "恶魔宝箱",
-    "cursededge": "诅咒之境",
-    "destitutecrossroads": "荒芜十字路口",
-    "menacingcrown": "威胁之冠",
-    "wraithrealm": "幽魂领域",
-    "anguishnexus": "苦痛枢纽",
-    "buriedslough": "埋葬沼泽",
-    "cyclopeantrap": "独眼巨人陷阱",
-    "forsakentrap": "遗弃陷阱",
-    "10increasedliferecoveryfromflasks10increasedmanarecoveryfromflasks": "药剂生命回复提高 10%，药剂魔力回复提高 10%",
-}
 
 
 def normalize_english_name(name: str) -> str:
@@ -119,6 +97,20 @@ def _chinese_page_title(page_html: str, english_name: str) -> str | None:
     return None
 
 
+def _english_page_matches(page_html: str, english_name: str) -> bool:
+    parser = _PageTextParser()
+    try:
+        parser.feed(page_html)
+    except Exception:
+        return False
+    expected = normalize_english_name(english_name)
+    if not expected:
+        return False
+    title = " ".join("".join(parser.title_parts).split()).split(" - ", 1)[0]
+    candidates = [title, *parser.headings]
+    return any(normalize_english_name(value) == expected for value in candidates)
+
+
 class PoEDBNameClient:
     """Resolve up to a price table's missing names and persist the cache."""
 
@@ -180,11 +172,11 @@ class PoEDBNameClient:
             # A cache write failure must not stop price collection or image rendering.
             return
 
-    def _fetch_page_title(self, english_name: str) -> tuple[str | None, bool]:
+    def _fetch_page(self, locale: str, english_name: str) -> tuple[str | None, bool]:
         slug = _poedb_slug(english_name)
-        if not slug:
+        if locale not in {"cn", "us"} or not slug:
             return None, True
-        url = BASE_URL + slug
+        url = f"https://poedb.tw/{locale}/{slug}"
         request = Request(
             url,
             headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
@@ -195,7 +187,7 @@ class PoEDBNameClient:
                 if (
                     final.scheme != "https"
                     or final.hostname != "poedb.tw"
-                    or not final.path.startswith("/cn/")
+                    or not final.path.startswith(f"/{locale}/")
                     or final.query
                     or final.fragment
                     or response.headers.get_content_type() != "text/html"
@@ -209,16 +201,25 @@ class PoEDBNameClient:
         except (URLError, TimeoutError, OSError):
             return None, False
         page_html = raw.decode("utf-8", errors="replace")
-        title = _chinese_page_title(page_html, english_name)
-        return title, True
+        if locale == "cn":
+            return _chinese_page_title(page_html, english_name), True
+        return (english_name if _english_page_matches(page_html, english_name) else None), True
+
+    def _fetch_page_title(self, english_name: str) -> tuple[str | None, bool]:
+        return self._fetch_page("cn", english_name)
+
+    def _fetch_english_page_matches(self, english_name: str) -> tuple[bool, bool]:
+        title, cacheable = self._fetch_page("us", english_name)
+        return bool(title), cacheable
 
     def _fetch_translation(self, english_name: str) -> tuple[str | None, bool]:
         match = re.match(r"(?i)^Foulborn\s+(.+)$", english_name.strip())
         page_name = match.group(1).strip() if match else english_name.strip()
         title, cacheable = self._fetch_page_title(page_name)
-        if title and match:
+        matches_english, english_cacheable = self._fetch_english_page_matches(page_name)
+        if title and matches_english and match:
             title = f"秽生·{title}"
-        return title, cacheable
+        return (title if matches_english else None), cacheable and english_cacheable
 
     async def resolve_names(self, names: list[str]) -> dict[str, str]:
         """Return normalized-English-name -> Simplified-Chinese display name."""
@@ -231,10 +232,6 @@ class PoEDBNameClient:
         resolved: dict[str, str] = {}
         missing: list[tuple[str, str]] = []
         for key, name in unique.items():
-            local_translation = LOCALIZED_FALLBACKS.get(key)
-            if local_translation:
-                resolved[key] = local_translation
-                continue
             cached = self._cache.get(key)
             if cached is None:
                 missing.append((key, name))

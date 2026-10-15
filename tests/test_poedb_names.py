@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from astrbot_plugin_poe1db.poedb_names import (
-    LOCALIZED_FALLBACKS,
     PoEDBNameClient,
+    _english_page_matches,
     _chinese_page_title,
     _poedb_slug,
     normalize_english_name,
@@ -32,14 +32,30 @@ class PoEDBNameTests(unittest.TestCase):
         )
         self.assertEqual(_chinese_page_title(page, "Harness the Void"), "虚空掌控")
 
+    def test_english_page_check_requires_the_exact_item_title(self):
+        page = "<html><head><title>Mageblood - PoEDB</title></head><body><h1>Heavy Belt</h1></body></html>"
+        self.assertTrue(_english_page_matches(page, "Mageblood"))
+        self.assertFalse(_english_page_matches(page, "Foulborn Mageblood"))
+
     def test_foulborn_uses_base_unique_translation_and_keeps_variant_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             client = PoEDBNameClient(Path(directory) / "names.json")
             with patch.object(client, "_fetch_page_title", return_value=("法师之血", True)) as fetch:
-                translated, cacheable = client._fetch_translation("Foulborn Mageblood")
+                with patch.object(client, "_fetch_english_page_matches", return_value=(True, True)) as english:
+                    translated, cacheable = client._fetch_translation("Foulborn Mageblood")
         self.assertEqual(translated, "秽生·法师之血")
         self.assertTrue(cacheable)
         fetch.assert_called_once_with("Mageblood")
+        english.assert_called_once_with("Mageblood")
+
+    def test_foulborn_requires_a_matching_english_source_page(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = PoEDBNameClient(Path(directory) / "names.json")
+            with patch.object(client, "_fetch_page_title", return_value=("法师之血", True)):
+                with patch.object(client, "_fetch_english_page_matches", return_value=(False, True)):
+                    translated, cacheable = client._fetch_translation("Foulborn Mageblood")
+        self.assertIsNone(translated)
+        self.assertTrue(cacheable)
 
     def test_translation_cache_survives_client_restart(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -63,18 +79,14 @@ class PoEDBNameTests(unittest.TestCase):
 
             self.assertEqual(asyncio.run(read_cached_name()), result)
 
-    def test_generated_valdo_map_names_use_simplified_chinese_fallbacks(self):
+    def test_names_without_a_poedb_translation_are_not_invented(self):
         with tempfile.TemporaryDirectory() as directory:
             client = PoEDBNameClient(Path(directory) / "names.json")
-            result = asyncio.run(
-                client.resolve_names(
-                    ["Secluded Ziggurat", "Ancestral Refuge", "Forgotten Pool"]
+            with patch.object(client, "_fetch_translation", return_value=(None, True)):
+                result = asyncio.run(
+                    client.resolve_names(["Secluded Ziggurat", "Ancestral Refuge"])
                 )
-            )
-        self.assertEqual(result[normalize_english_name("Secluded Ziggurat")], "幽隐金字塔")
-        self.assertEqual(result[normalize_english_name("Ancestral Refuge")], "先祖庇护所")
-        self.assertEqual(result[normalize_english_name("Forgotten Pool")], "遗忘之池")
-        self.assertGreaterEqual(len(LOCALIZED_FALLBACKS), 10)
+        self.assertEqual(result, {})
 
 
 if __name__ == "__main__":
