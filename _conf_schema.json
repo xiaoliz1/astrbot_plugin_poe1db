@@ -1,0 +1,14 @@
+{
+  "timeout_seconds": {
+    "type": "int",
+    "description": "PoE Wiki 与物价接口请求超时（秒）",
+    "hint": "范围 5–30 秒。",
+    "default": 15
+  },
+  "cache_minutes": {
+    "type": "int",
+    "description": "PoE Wiki 页面缓存时间（分钟）",
+    "hint": "范围 0–60 分钟；0 表示不缓存。",
+    "default": 15
+  }
+}
