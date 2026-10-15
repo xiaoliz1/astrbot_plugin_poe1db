@@ -82,6 +82,7 @@ class PriceImageTests(unittest.TestCase):
                 "d",
                 "today",
                 "https://cdn.poedb.tw/image/Art/2DItems/Currency/CurrencyDuplicate.webp",
+                "通货仓库",
             ),
             NationalCurrencyPrice("崇高石（神圣计价）", "Exalted Orb", 2, 1, "d", "today"),
             NationalCurrencyPrice("未匹配物品", "Unknown Relic", 1, 0.5, "d", "today"),
@@ -101,6 +102,8 @@ class PriceImageTests(unittest.TestCase):
             html,
         )
         self.assertIn("买入均价（神圣石）", html)
+        self.assertIn("通货仓库</td>", html)
+        self.assertIn("分类</th>", html)
         self.assertIn(">12 神圣石</td>", html)
         self.assertNotIn("100 崇高石", html)
         self.assertLess(html.index("神圣石</span>"), html.index("卡兰德的魔镜"))
@@ -108,7 +111,7 @@ class PriceImageTests(unittest.TestCase):
 
     def test_national_image_caps_rows_and_reports_when_divine_quotes_are_empty(self):
         rows = tuple(
-            NationalCurrencyPrice(f"物品 {index}", f"Item {index}", index + 1, index, "d", "today")
+            NationalCurrencyPrice(f"物品 {index}", f"Item {index}", index + 1, index, "d", "today", category="高价命运卡")
             for index in range(55)
         ) + (NationalCurrencyPrice("混沌石物品", "Chaos Item", 100, 80, "c", "today"),)
         html = render_national_html(NationalPriceSnapshot(rows, "today"))

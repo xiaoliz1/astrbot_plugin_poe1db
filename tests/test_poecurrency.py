@@ -43,14 +43,27 @@ class PoECurrencyTests(unittest.TestCase):
                 ],
             },
             {"category_label": "圣甲虫", "items": [{"item_name": "忽略", "buy_avg": 9}]},
+            {
+                "category_label": "碎片仓库",
+                "items": [{
+                    "item_name": "镜片",
+                    "engname": "Mirror Shard",
+                    "buy_avg": 7,
+                    "sell_avg": 6,
+                    "currency_unit": "d",
+                    "latest_datetime": "2026-10-15 15:00:00",
+                }],
+            },
         ])
-        self.assertEqual(len(snapshot.prices), 1)
+        self.assertEqual(len(snapshot.prices), 2)
         self.assertEqual(snapshot.prices[0].name, "神圣石")
         self.assertEqual(snapshot.prices[0].currency_unit, "c")
         self.assertEqual(
             snapshot.prices[0].icon_url,
             "https://cdn.poedb.tw/image/Art/2DItems/Currency/DivineOrb.webp",
         )
+        self.assertEqual(snapshot.prices[1].category, "碎片仓库")
+        self.assertEqual(snapshot.prices[1].buy_average, 7)
         self.assertEqual(snapshot.latest_update, "2026-10-15 15:00:00")
 
     def test_summary_rejects_missing_currency_category(self):

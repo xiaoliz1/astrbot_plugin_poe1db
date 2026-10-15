@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SUMMARY_URL = "https://poecurrency.top/api/summary?version=1"
-USER_AGENT = "AstrBot-PoE1DB/0.4.3 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
+USER_AGENT = "AstrBot-PoE1DB/0.4.4 (+https://github.com/xiaoliz1/astrbot_plugin_poe1db)"
 MAX_RESPONSE_BYTES = 2_500_000
 CURRENCY_NAMES = {"c": "混沌石", "e": "崇高石", "d": "神圣石"}
 
@@ -31,6 +31,7 @@ class NationalCurrencyPrice:
     currency_unit: str
     updated_at: str
     icon_url: str | None = None
+    category: str = ""
 
 
 @dataclass(frozen=True)
@@ -70,57 +71,53 @@ def _number(value: object) -> float | None:
 def parse_national_summary(payload: object) -> NationalPriceSnapshot:
     if not isinstance(payload, list):
         raise NationalEconomyError("国服行情数据格式不正确")
-    category = next(
-        (
-            value
-            for value in payload
-            if isinstance(value, dict) and value.get("category_label") == "通货仓库"
-        ),
-        None,
-    )
-    rows = category.get("items") if isinstance(category, dict) else None
-    if not isinstance(rows, list):
-        raise NationalEconomyError("国服行情没有返回通货仓库数据")
-
     prices: list[NationalCurrencyPrice] = []
-    for row in rows:
-        if not isinstance(row, dict) or row.get("error") is True:
+    for category in payload:
+        if not isinstance(category, dict):
             continue
-        name = row.get("item_name")
-        english_name = row.get("engname", "")
-        unit = row.get("currency_unit")
-        buy_average = _number(row.get("buy_avg"))
-        sell_average = _number(row.get("sell_avg"))
-        if (
-            not isinstance(name, str)
-            or not name.strip()
-            or not isinstance(english_name, str)
-            or not isinstance(unit, str)
-            or unit not in CURRENCY_NAMES
-            or buy_average is None
-            or sell_average is None
-            or max(buy_average, sell_average) <= 0
-        ):
+        category_label = category.get("category_label")
+        rows = category.get("items")
+        if not isinstance(category_label, str) or not isinstance(rows, list):
             continue
-        updated_at = row.get("latest_datetime", "")
-        icon_url = row.get("item_icon")
-        prices.append(
-            NationalCurrencyPrice(
-                name=name.strip(),
-                english_name=english_name.strip(),
-                buy_average=buy_average,
-                sell_average=sell_average,
-                currency_unit=unit,
-                updated_at=updated_at.strip() if isinstance(updated_at, str) else "",
-                icon_url=(
-                    icon_url.strip()
-                    if isinstance(icon_url, str) and len(icon_url.strip()) <= 2048
-                    else None
-                ),
+        for row in rows:
+            if not isinstance(row, dict) or row.get("error") is True:
+                continue
+            name = row.get("item_name")
+            english_name = row.get("engname", "")
+            unit = row.get("currency_unit")
+            buy_average = _number(row.get("buy_avg"))
+            sell_average = _number(row.get("sell_avg"))
+            if (
+                not isinstance(name, str)
+                or not name.strip()
+                or not isinstance(english_name, str)
+                or not isinstance(unit, str)
+                or unit not in CURRENCY_NAMES
+                or buy_average is None
+                or sell_average is None
+                or max(buy_average, sell_average) <= 0
+            ):
+                continue
+            updated_at = row.get("latest_datetime", "")
+            icon_url = row.get("item_icon")
+            prices.append(
+                NationalCurrencyPrice(
+                    name=name.strip(),
+                    english_name=english_name.strip(),
+                    buy_average=buy_average,
+                    sell_average=sell_average,
+                    currency_unit=unit,
+                    updated_at=updated_at.strip() if isinstance(updated_at, str) else "",
+                    icon_url=(
+                        icon_url.strip()
+                        if isinstance(icon_url, str) and len(icon_url.strip()) <= 2048
+                        else None
+                    ),
+                    category=category_label.strip(),
+                )
             )
-        )
     if not prices:
-        raise NationalEconomyError("当前赛季暂时没有可用的国服通货价格")
+        raise NationalEconomyError("当前赛季暂时没有可用的国服物品价格")
     latest_update = max((price.updated_at for price in prices if price.updated_at), default="")
     return NationalPriceSnapshot(tuple(prices), latest_update)
 
