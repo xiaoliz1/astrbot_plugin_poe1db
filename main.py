@@ -9,8 +9,13 @@ from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from .builds import character_search_url
+from .builds import BuildSearchError, find_character_url
 from .economy import EconomyClient, EconomyError
+from .poecurrency import (
+    CURRENCY_NAMES,
+    NationalEconomyClient,
+    NationalEconomyError,
+)
 from .wiki import WikiClient, WikiError, WikiPage
 
 
@@ -69,7 +74,7 @@ def _completion_text(response: object) -> str:
     "astrbot_plugin_poe1db",
     "xiaoliz1",
     "流放之路1资料问答",
-    "0.1.0",
+    "0.2.0",
 )
 class Poe1DBPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -80,6 +85,8 @@ class Poe1DBPlugin(Star):
         cache_seconds = _bounded_int(config.get("cache_minutes"), 15, 0, 60) * 60
         self.wiki = WikiClient(timeout, cache_seconds)
         self.economy = EconomyClient(timeout, 300)
+        self.national_economy = NationalEconomyClient(timeout, 3600)
+        self.build_timeout = timeout
 
     @filter.command("poe1")
     async def poe1(self, event: AstrMessageEvent):
@@ -90,7 +97,7 @@ class Poe1DBPlugin(Star):
                 "《流放之路 1》：\n"
                 "/poe1 问题\n"
                 "/poe1 国际服物价\n"
-                "/poe1 国服物价（暂未接入）\n"
+                "/poe1 国服物价\n"
                 "/poe1search 英文词条\n"
                 "/poe1bd 角色名"
             )
@@ -99,7 +106,7 @@ class Poe1DBPlugin(Star):
             yield event.plain_result(await self._price_text())
             return
         if query in ("国服物价", "國服物價"):
-            yield event.plain_result("目前只接入 poe.ninja 国际服公开行情，国服物价源尚未接入。")
+            yield event.plain_result(await self._national_price_text())
             return
         if len(query) > 300:
             yield event.plain_result("问题请控制在 300 字以内。")
@@ -126,18 +133,30 @@ class Poe1DBPlugin(Star):
 
     @filter.command("poe1bd")
     async def poe1_build(self, event: AstrMessageEvent):
-        """Return a poe.ninja public Builds search page for a character name."""
+        """Find a public poe.ninja Builds character detail page by name."""
         name = _command_argument(event.message_str, "poe1bd")
         if not name:
             yield event.plain_result("用法：/poe1bd 角色名")
             return
         try:
             league = await self.economy.current_league()
-            url = character_search_url(league, name)
         except (EconomyError, ValueError) as exc:
-            yield event.plain_result(f"暂时无法生成角色 Builds 搜索链接：{exc}")
+            yield event.plain_result(f"暂时无法查询 poe.ninja 当前赛季：{exc}")
             return
-        yield event.plain_result(f"poe.ninja 当前赛季 Builds 搜索：\n{url}")
+        try:
+            detail_url = await find_character_url(
+                league, name, timeout_seconds=self.build_timeout
+            )
+        except BuildSearchError:
+            yield event.plain_result(
+                "暂时无法读取 poe.ninja 角色详情，请检查 AstrBot 环境中的 "
+                "Playwright、Chromium 和网络连接。"
+            )
+            return
+        if detail_url:
+            yield event.plain_result(detail_url)
+        else:
+            yield event.plain_result(f"当前赛季 Builds 中未找到「{name}」的唯一公开角色详情页。")
 
     async def _price_text(self) -> str:
         try:
@@ -148,6 +167,30 @@ class Poe1DBPlugin(Star):
         for index, price in enumerate(snapshot.prices[:25], 1):
             rows.append(f"{index}. {price.name}：{price.chaos_value:g} 混沌石")
         rows.append("数据源：poe.ninja 公开经济 API")
+        return "\n".join(rows)
+
+    async def _national_price_text(self) -> str:
+        try:
+            snapshot = await self.national_economy.currency_snapshot()
+        except NationalEconomyError as exc:
+            return f"国服物价暂时无法读取：{exc}"
+        rows = ["PoE1 国服通货行情 · 今日均价"]
+        if snapshot.latest_update:
+            rows[0] += f" · 更新至 {snapshot.latest_update}"
+        for unit in ("d", "e", "c"):
+            prices = [price for price in snapshot.prices if price.currency_unit == unit]
+            if not prices:
+                continue
+            rows.append(f"\n按{CURRENCY_NAMES[unit]}计价：")
+            prices.sort(
+                key=lambda price: (-max(price.buy_average, price.sell_average), price.name)
+            )
+            for price in prices[:10]:
+                rows.append(
+                    f"{price.name}：买 {price.buy_average:g} / 卖 {price.sell_average:g} "
+                    f"{CURRENCY_NAMES[unit]}"
+                )
+        rows.append("数据源：poecurrency.top（国服公开行情，OCR 采集）")
         return "\n".join(rows)
 
     async def _answer_question(self, event: AstrMessageEvent, question: str):
