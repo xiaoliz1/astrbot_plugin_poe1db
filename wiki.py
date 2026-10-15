@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import quote, unquote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 API_URL = "https://www.poewiki.net/w/api.php"
@@ -28,6 +28,7 @@ class WikiPage:
     title: str
     url: str
     extract: str
+    image_url: str | None = None
 
 
 class _SameHostRedirects(HTTPRedirectHandler):
@@ -157,6 +158,109 @@ class WikiClient:
             )
         return results
 
+    async def first_image(self, pages: list[WikiPage]) -> str | None:
+        """Return the first safe article icon available for a search result list."""
+        for page in pages[:8]:
+            try:
+                image_url = (await self._thumbnail_urls([page.title])).get(page.title.casefold())
+            except WikiError:
+                continue
+            if image_url and self.allowed_image_url(image_url):
+                return image_url
+        return None
+
+    async def _thumbnail_urls(self, titles: list[str]) -> dict[str, str]:
+        safe_titles = [
+            re.sub(r"\s+", " ", title).strip()[:160]
+            for title in titles[:8]
+            if isinstance(title, str) and title.strip() and "|" not in title
+        ]
+        if not safe_titles:
+            return {}
+        params = {
+            "action": "query",
+            "format": "json",
+            "formatversion": "2",
+            "prop": "pageimages|images",
+            "titles": "|".join(safe_titles),
+            "piprop": "thumbnail",
+            "pithumbsize": "400",
+            "imlimit": "50",
+        }
+        payload = await self._fetch_json(API_URL + "?" + urlencode(params))
+        pages = (payload.get("query") or {}).get("pages") or []
+        if not isinstance(pages, list):
+            return {}
+        image_urls: dict[str, str] = {}
+        file_to_page: dict[str, str] = {}
+        file_titles: dict[str, str] = {}
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            title = page.get("title")
+            thumbnail = page.get("thumbnail")
+            source = thumbnail.get("source") if isinstance(thumbnail, dict) else None
+            if not isinstance(title, str):
+                continue
+            if isinstance(source, str) and self.allowed_image_url(source):
+                image_urls[title.casefold()] = source
+                continue
+
+            target_name = re.sub(r"[^a-z0-9]", "", title.casefold())
+            images = page.get("images")
+            candidates: list[tuple[int, str]] = []
+            if isinstance(images, list):
+                for image in images:
+                    file_title = image.get("title") if isinstance(image, dict) else None
+                    if not isinstance(file_title, str) or not file_title.startswith("File:") or "|" in file_title:
+                        continue
+                    filename = file_title[5:].rsplit(".", 1)[0]
+                    normalized_filename = re.sub(r"[^a-z0-9]", "", filename.casefold())
+                    if not normalized_filename.startswith(target_name):
+                        continue
+                    if "skillicon" in normalized_filename:
+                        priority = 0
+                    elif "inventoryicon" in normalized_filename:
+                        priority = 1
+                    elif "icon" in normalized_filename:
+                        priority = 2
+                    else:
+                        priority = 3
+                    candidates.append((priority, file_title))
+            if candidates:
+                _, selected_file = min(candidates)
+                file_to_page[selected_file.casefold()] = title.casefold()
+                file_titles[selected_file.casefold()] = selected_file
+
+        if file_to_page:
+            info_params = {
+                "action": "query",
+                "format": "json",
+                "formatversion": "2",
+                "prop": "imageinfo",
+                "titles": "|".join(file_titles.values()),
+                "iiprop": "url",
+                "iiurlwidth": "400",
+            }
+            info_payload = await self._fetch_json(API_URL + "?" + urlencode(info_params))
+            info_pages = (info_payload.get("query") or {}).get("pages") or []
+            if isinstance(info_pages, list):
+                for page in info_pages:
+                    if not isinstance(page, dict):
+                        continue
+                    file_title = page.get("title")
+                    infos = page.get("imageinfo")
+                    info = infos[0] if isinstance(infos, list) and infos else None
+                    source = (
+                        info.get("thumburl") or info.get("url")
+                        if isinstance(info, dict)
+                        else None
+                    )
+                    target_page = file_to_page.get(file_title.casefold()) if isinstance(file_title, str) else None
+                    if target_page and isinstance(source, str) and self.allowed_image_url(source):
+                        image_urls[target_page] = source
+        return image_urls
+
     async def page(self, title: str, max_chars: int = 1200) -> WikiPage | None:
         title = re.sub(r"\s+", " ", title).strip()[:160]
         if not title:
@@ -165,12 +269,14 @@ class WikiClient:
             "action": "query",
             "format": "json",
             "formatversion": "2",
-            "prop": "extracts|info",
+            "prop": "extracts|info|pageimages",
             "titles": title,
             "explaintext": "1",
             "exchars": str(max(1, min(max_chars, 1200))),
             "exlimit": "1",
             "inprop": "url",
+            "piprop": "thumbnail",
+            "pithumbsize": "400",
         }
         payload = await self._fetch_json(API_URL + "?" + urlencode(params))
         pages = (payload.get("query") or {}).get("pages") or []
@@ -184,10 +290,18 @@ class WikiClient:
         url = result.get("fullurl")
         if not isinstance(url, str) or not self._is_page_url(url):
             url = PAGE_BASE_URL + quote(actual_title.replace(" ", "_"), safe="()'")
+        thumbnail = result.get("thumbnail")
+        image_url = thumbnail.get("source") if isinstance(thumbnail, dict) else None
+        if not self.allowed_image_url(image_url):
+            try:
+                image_url = (await self._thumbnail_urls([actual_title])).get(actual_title.casefold())
+            except WikiError:
+                image_url = None
         return WikiPage(
             title=actual_title[:160],
             url=url,
             extract=re.sub(r"\s+", " ", extract).strip()[:max_chars],
+            image_url=image_url if self.allowed_image_url(image_url) else None,
         )
 
     @classmethod
@@ -201,6 +315,31 @@ class WikiClient:
             and parts.path.startswith("/wiki/")
             and not parts.query
             and not parts.fragment
+        )
+
+    @staticmethod
+    def allowed_image_url(url: object) -> bool:
+        if not isinstance(url, str) or not url or "\\" in url:
+            return False
+        try:
+            parts = urlsplit(url)
+            port = parts.port
+        except ValueError:
+            return False
+        if (
+            parts.scheme != "https"
+            or parts.hostname != "www.poewiki.net"
+            or parts.username is not None
+            or parts.password is not None
+            or port is not None
+            or parts.query
+            or parts.fragment
+            or not parts.path.startswith("/images/")
+        ):
+            return False
+        return all(
+            part not in ("", ".", "..")
+            for part in map(unquote, parts.path.split("/")[2:])
         )
 
     @staticmethod

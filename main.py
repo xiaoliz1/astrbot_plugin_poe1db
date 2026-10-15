@@ -10,6 +10,11 @@ from datetime import datetime, timedelta
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools, register
+from astrbot.core.utils.session_waiter import (
+    SessionController,
+    SessionFilter,
+    session_waiter,
+)
 from quart import jsonify
 
 from .builds import BuildSearchError, find_character_url
@@ -59,6 +64,35 @@ def _format_search_results(pages: list[WikiPage], limit: int = 5) -> str:
     return "\n\n".join(rows)
 
 
+def _normalized_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.casefold())
+
+
+def _ambiguous_wiki_candidates(query: str, pages: list[WikiPage]) -> list[WikiPage]:
+    normalized_query = _normalized_name(query)
+    if len(normalized_query) < 3:
+        return []
+    matches = [page for page in pages if normalized_query in _normalized_name(page.title)]
+    return matches[:5] if len(matches) > 1 else []
+
+
+def _format_disambiguation_prompt(query: str, candidates: list[WikiPage]) -> str:
+    options = "\n".join(
+        f"{index}. {candidate.title}"
+        for index, candidate in enumerate(candidates, 1)
+    )
+    return (
+        f"「{query}」可能对应多个词条，请选择：\n{options}\n"
+        "请在 60 秒内回复编号；回复“取消”可结束选择。"
+    )
+
+
+class _SenderSessionFilter(SessionFilter):
+    def filter(self, event: AstrMessageEvent) -> str:
+        identity = (event.unified_msg_origin, event.get_sender_id())
+        return "astrbot_plugin_poe1db:choice:" + repr(identity)
+
+
 def _parse_terms(text: str, fallback: str) -> list[str]:
     raw = text.strip()
     if raw.startswith("```"):
@@ -89,7 +123,7 @@ def _completion_text(response: object) -> str:
     "astrbot_plugin_poe1db",
     "xiaoliz1",
     "流放之路1资料问答",
-    "0.3.0",
+    "0.4.0",
 )
 class Poe1DBPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -269,7 +303,12 @@ class Poe1DBPlugin(Star):
                 if isinstance(international, PriceSnapshot)
                 else {}
             )
-            html = render_national_html(snapshot, icons_by_name)
+            international = self._price_snapshots.get("international")
+            html = render_national_html(
+                snapshot,
+                international if isinstance(international, PriceSnapshot) else None,
+                icons_by_name,
+            )
         else:
             return None
         try:
@@ -458,12 +497,19 @@ class Poe1DBPlugin(Star):
         if len(query) > 120:
             yield event.plain_result("搜索词请控制在 120 个字符以内。")
             return
+        result_limit = _bounded_int(self.config.get("max_sources"), 5, 1, 8)
         try:
-            pages = await self.wiki.search(query, limit=5)
+            pages = await self.wiki.search(query, limit=result_limit)
         except WikiError as exc:
             yield event.plain_result(f"PoE Wiki 暂时无法搜索：{exc}")
             return
-        yield event.plain_result(_format_search_results(pages))
+        yield event.plain_result(_format_search_results(pages, result_limit))
+        try:
+            image_url = await self.wiki.first_image(pages)
+        except WikiError:
+            image_url = None
+        if image_url:
+            yield event.image_result(image_url)
 
     @filter.command("poe1bd")
     async def poe1_build(self, event: AstrMessageEvent):
@@ -516,45 +562,207 @@ class Poe1DBPlugin(Star):
         except Exception:
             terms = [question]
 
+        result_limit = _bounded_int(self.config.get("max_sources"), 5, 1, 8)
+        grouped_candidates: list[tuple[str, list[WikiPage]]] = []
+        ambiguities: list[tuple[int, str, list[WikiPage]]] = []
         term = terms[0]
-        page = None
-        normalize = lambda value: re.sub(r"[\W_]+", "", value.casefold())
         for candidate_term in terms:
+            term = candidate_term
             try:
-                hits = await self.wiki.search(candidate_term, limit=5)
+                hits = await self.wiki.search(candidate_term, limit=max(result_limit, 5))
                 if not hits:
                     continue
-                exact = [
-                    hit for hit in hits
-                    if normalize(hit.title) == normalize(candidate_term)
-                ]
-                selected = exact[0] if exact else hits[0]
-                page = await self.wiki.page(selected.title)
-                if page:
-                    term = candidate_term
-                    break
+                matches = _ambiguous_wiki_candidates(candidate_term, hits)
+                if matches:
+                    group_index = len(grouped_candidates)
+                    grouped_candidates.append((candidate_term, matches))
+                    ambiguities.append((group_index, candidate_term, matches))
+                else:
+                    exact = [
+                        hit for hit in hits
+                        if _normalized_name(hit.title) == _normalized_name(candidate_term)
+                    ]
+                    selected = exact[0] if exact else hits[0]
+                    grouped_candidates.append((candidate_term, [selected]))
             except WikiError:
                 continue
-        if not page:
+            if len(grouped_candidates) >= result_limit:
+                break
+
+        if not grouped_candidates:
             yield event.plain_result(
                 "PoE Wiki 没有找到足够资料；可以改用英文技能名或物品名搜索。\n"
                 + self.wiki.search_url(term)
             )
             return
 
+        if ambiguities:
+            async for result in self._request_candidate_choice(
+                event,
+                question,
+                provider_id,
+                result_limit,
+                grouped_candidates,
+                ambiguities,
+            ):
+                yield result
+            return
+
+        pages = await self._load_selected_wiki_pages(grouped_candidates, result_limit)
+        if not pages:
+            yield event.plain_result(
+                "PoE Wiki 暂时无法读取匹配词条，请稍后重试。\n"
+                + self.wiki.search_url(term)
+            )
+            return
+        async for result in self._answer_from_wiki_pages(
+            event, question, pages, provider_id
+        ):
+            yield result
+
+    async def _load_selected_wiki_pages(
+        self,
+        grouped_candidates: list[tuple[str, list[WikiPage]]],
+        max_sources: int,
+    ) -> list[WikiPage]:
+        pages: list[WikiPage] = []
+        seen: set[str] = set()
+        for _, candidates in grouped_candidates:
+            if not candidates:
+                continue
+            try:
+                page = await self.wiki.page(candidates[0].title)
+            except WikiError:
+                continue
+            if page and page.url not in seen:
+                pages.append(page)
+                seen.add(page.url)
+            if len(pages) >= max_sources:
+                break
+        return pages
+
+    async def _answer_from_wiki_pages(
+        self,
+        event: AstrMessageEvent,
+        question: str,
+        pages: list[WikiPage],
+        provider_id: str,
+    ):
+        source_text = "\n\n".join(
+            f"[{index}] {page.title}\nURL: {page.url}\n{page.extract}"
+            for index, page in enumerate(pages, 1)
+        )
+
         try:
             response = await self.context.llm_generate(
                 chat_provider_id=provider_id,
                 system_prompt=(
                     "你是《流放之路》资料助手。根据给出的 PoE Wiki 原文，用简体中文简短回答。"
-                    "只陈述来源支持的内容；资料不足就明确说不足，不要补猜。"
+                    "只陈述来源支持的内容，关键结论后标注 [1]、[2] 等来源编号。"
+                    "资料不足就明确说不足，不要补猜；来源间有差异时说明差异和出处。"
                     "回答控制在 250 个汉字以内，不要重复列出长篇英文原文。"
                 ),
-                prompt=f"玩家问题：{question}\n\nPoE Wiki 资料：\n[{page.title}]\n{page.extract}",
+                prompt=f"玩家问题：{question}\n\nPoE Wiki 检索资料：\n{source_text}",
             )
             answer = _completion_text(response)
         except Exception:
             answer = "当前聊天模型未能完成资料整理，请查看 PoE Wiki 页面。"
         if not answer:
             answer = "当前没有生成可用的简体中文回答，请查看 PoE Wiki 页面。"
-        yield event.plain_result(f"{answer.strip()}\n资料：{page.title} {page.url}")
+        sources = "\n".join(
+            f"[{index}] {page.title} {page.url}"
+            for index, page in enumerate(pages, 1)
+        )
+        yield event.plain_result(f"{answer.strip()}\n资料来源：\n{sources}")
+        image_url = next(
+            (
+                page.image_url
+                for page in pages
+                if page.image_url and WikiClient.allowed_image_url(page.image_url)
+            ),
+            None,
+        )
+        if image_url:
+            yield event.image_result(image_url)
+
+    async def _request_candidate_choice(
+        self,
+        event: AstrMessageEvent,
+        question: str,
+        provider_id: str,
+        max_sources: int,
+        grouped_candidates: list[tuple[str, list[WikiPage]]],
+        ambiguities: list[tuple[int, str, list[WikiPage]]],
+    ):
+        grouped = [(query, list(candidates)) for query, candidates in grouped_candidates]
+        choice_position = 0
+        choice_origin = event.unified_msg_origin
+        choice_sender = str(event.get_sender_id())
+
+        @session_waiter(timeout=60)
+        async def wait_for_choice(
+            controller: SessionController, event2: AstrMessageEvent
+        ):
+            nonlocal choice_position
+            if (
+                event2.unified_msg_origin != choice_origin
+                or str(event2.get_sender_id()) != choice_sender
+            ):
+                controller.keep(timeout=60, reset_timeout=True)
+                return
+
+            answer = event2.message_str.strip()
+            if answer.casefold() in {"0", "取消", "取消选择", "cancel", "退出"}:
+                controller.stop()
+                await event2.send(event2.plain_result("已取消词条选择。"))
+                return
+            group_index, query, candidates = ambiguities[choice_position]
+            if not re.fullmatch(r"\d{1,2}", answer):
+                await event2.send(
+                    event2.plain_result(
+                        f"请回复 1 到 {len(candidates)} 的编号，或回复“取消”。"
+                    )
+                )
+                controller.keep(timeout=60, reset_timeout=True)
+                return
+            selected_index = int(answer)
+            if not 1 <= selected_index <= len(candidates):
+                await event2.send(
+                    event2.plain_result(
+                        f"编号无效，请回复 1 到 {len(candidates)}，或回复“取消”。"
+                    )
+                )
+                controller.keep(timeout=60, reset_timeout=True)
+                return
+
+            grouped[group_index] = (query, [candidates[selected_index - 1]])
+            choice_position += 1
+            if choice_position < len(ambiguities):
+                _, next_query, next_candidates = ambiguities[choice_position]
+                await event2.send(
+                    event2.plain_result(
+                        _format_disambiguation_prompt(next_query, next_candidates)
+                    )
+                )
+                controller.keep(timeout=60, reset_timeout=True)
+                return
+
+            controller.stop()
+            pages = await self._load_selected_wiki_pages(grouped, max_sources)
+            if not pages:
+                await event2.send(
+                    event2.plain_result("所选词条暂时无法读取，请稍后重新查询。")
+                )
+                return
+            async for result in self._answer_from_wiki_pages(
+                event2, question, pages, provider_id
+            ):
+                await event2.send(result)
+
+        yield event.plain_result(
+            _format_disambiguation_prompt(ambiguities[0][1], ambiguities[0][2])
+        )
+        try:
+            await wait_for_choice(event, session_filter=_SenderSessionFilter())
+        except TimeoutError:
+            yield event.plain_result("词条选择已超时，请重新发送问题。")

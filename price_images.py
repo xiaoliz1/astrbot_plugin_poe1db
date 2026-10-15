@@ -7,11 +7,10 @@ import math
 import re
 from urllib.parse import unquote, urlsplit
 
-from .economy import PriceSnapshot
-from .poecurrency import CURRENCY_NAMES, NationalPriceSnapshot
+from .economy import CurrencyPrice, PriceSnapshot
+from .poecurrency import NationalPriceSnapshot
 
 IMAGE_ROWS = 50
-NATIONAL_ROWS_PER_UNIT = 10
 
 
 def _safe(value: object) -> str:
@@ -78,7 +77,7 @@ def _document(title: str, subtitle: str, table: str, count: int, source: str) ->
 .count{{color:#a9bac7;font-size:12px;margin:0 0 8px}}table{{width:100%;border-collapse:collapse;table-layout:fixed}}th{{color:#a9bac7;font-size:12px;text-align:left;background:#223340;padding:9px 11px;border-bottom:2px solid #17c7a8}}
 td{{height:39px;padding:6px 11px;border-bottom:1px solid #2c3d4a;white-space:nowrap}}tbody tr:nth-child(even){{background:#1d2b37}}.rank{{width:52px;color:#7490a3}}.item-col{{width:52%;overflow:hidden}}.item{{display:flex;align-items:center;gap:9px;overflow:hidden;font-weight:600}}.item span:last-child{{overflow:hidden;text-overflow:ellipsis}}
 .icon{{width:27px;height:27px;object-fit:contain;flex:0 0 27px}}.icon.empty{{display:inline-block;border:1px solid #465766;background:linear-gradient(135deg,#283a48,#14202b);border-radius:4px}}.value{{color:#d3e9ff;font-variant-numeric:tabular-nums;font-weight:700}}.group td{{height:31px;background:#14212c;color:#26d0ae;font-size:12px;font-weight:700;letter-spacing:1px}}
-.category{{width:105px;color:#9eb2c2;font-size:12px;overflow:hidden;text-overflow:ellipsis}}.trend{{width:175px;color:#a9bac7;font-size:12px;text-align:right}}.trend-inner{{display:flex;align-items:center;justify-content:flex-end;gap:8px}}.up{{color:#35d5a7}}.down{{color:#f77983}}.flat,.empty{{color:#879aa9}}
+.national .rank{{width:78px}}.category{{width:105px;color:#9eb2c2;font-size:12px;overflow:hidden;text-overflow:ellipsis}}.trend{{width:175px;color:#a9bac7;font-size:12px;text-align:right}}.trend-inner{{display:flex;align-items:center;justify-content:flex-end;gap:8px}}.up{{color:#35d5a7}}.down{{color:#f77983}}.flat,.empty{{color:#879aa9}}
 .foot{{margin:12px 0 0;color:#879aa9;font-size:11px}}
 </style></head><body><main class="card"><div class="eyebrow">PATH OF EXILE 1 · ECONOMY</div><h1>{_safe(title)}</h1><p class="meta">{_safe(subtitle)}</p><p class="count">按价格排序 · 显示 {count} 项</p>{table}<p class="foot">数据来源：{_safe(source)} · 图片由 AstrBot 后台定时生成</p></main></body></html>'''
 
@@ -125,34 +124,58 @@ def render_international_html(snapshot: PriceSnapshot, updated_at: str) -> str:
 
 def render_national_html(
     snapshot: NationalPriceSnapshot,
+    international_snapshot: PriceSnapshot | None = None,
     icons_by_english_name: dict[str, str] | None = None,
 ) -> str:
     icon_map = icons_by_english_name or {}
+    ranked_international = (
+        sorted(
+            (price for price in international_snapshot.prices if isinstance(price, CurrencyPrice)),
+            key=lambda price: (-price.chaos_value, price.name.casefold()),
+        )
+        if international_snapshot
+        else []
+    )
+    rank_by_name = {
+        re.sub(r"[^a-z0-9]", "", price.name.casefold()): index
+        for index, price in enumerate(ranked_international)
+    }
+    divine_prices = [price for price in snapshot.prices if price.currency_unit == "d"]
+    divine_prices.sort(
+        key=lambda price: (
+            0 if re.sub(r"[^a-z0-9]", "", price.english_name.casefold()) in rank_by_name else 1,
+            rank_by_name.get(re.sub(r"[^a-z0-9]", "", price.english_name.casefold()), 0),
+            -max(price.buy_average, price.sell_average),
+            price.name.casefold(),
+        )
+    )
+    selected_prices = divine_prices[:IMAGE_ROWS]
     entries: list[str] = []
-    count = 0
-    for unit in ("d", "e", "c"):
-        prices = [price for price in snapshot.prices if price.currency_unit == unit]
-        prices.sort(key=lambda price: (-max(price.buy_average, price.sell_average), price.name))
-        if not prices:
-            continue
-        entries.append(f'<tr class="group"><td colspan="4">按{_safe(CURRENCY_NAMES[unit])}计价</td></tr>')
-        for index, price in enumerate(prices[:NATIONAL_ROWS_PER_UNIT], 1):
-            icon = icon_map.get(re.sub(r"[^a-z0-9]", "", price.english_name.casefold()))
-            entries.append(
-                "<tr>"
-                f'<td class="rank">{index:02d}</td>'
-                f'<td class="item-col">{_name_cell(price.name, icon)}</td>'
-                f'<td class="value">买 { _format(price.buy_average) } { _safe(CURRENCY_NAMES[unit])}</td>'
-                f'<td class="value">卖 { _format(price.sell_average) } { _safe(CURRENCY_NAMES[unit])}</td>'
-                "</tr>"
-            )
-            count += 1
-    table = '<table><thead><tr><th class="rank">#</th><th>物品</th><th>买入均价</th><th>卖出均价</th></tr></thead><tbody>' + "".join(entries) + "</tbody></table>"
+    for price in selected_prices:
+        key = re.sub(r"[^a-z0-9]", "", price.english_name.casefold())
+        icon = icon_map.get(key)
+        international_rank = rank_by_name.get(key)
+        rank_label = (
+            f"国际{international_rank + 1:02d}"
+            if international_rank is not None
+            else "国服"
+        )
+        entries.append(
+            "<tr>"
+            f'<td class="rank">{rank_label}</td>'
+            f'<td class="item-col">{_name_cell(price.name, icon)}</td>'
+            f'<td class="value">{_format(price.buy_average)} 神圣石</td>'
+            f'<td class="value">{_format(price.sell_average)} 神圣石</td>'
+            "</tr>"
+        )
+    if not entries:
+        entries.append('<tr><td colspan="4" class="empty">当前没有神圣石计价的国服行情</td></tr>')
+    table = '<table class="national"><thead><tr><th class="rank">排序来源</th><th>物品</th><th>买入均价（神圣石）</th><th>卖出均价（神圣石）</th></tr></thead><tbody>' + "".join(entries) + "</tbody></table>"
     updated_at = snapshot.latest_update or "接口未提供更新时间"
     return _document(
         "国服物价表",
-        f"PoE1 当前赛季 · 数据更新时间：{updated_at}",
+        f"PoE1 当前赛季 · 神圣石计价 · 匹配项按国际服价格排序，其余按国服神圣石报价排序 · 更新时间：{updated_at}",
         table,
-        count,
+        len(selected_prices),
         "poecurrency.top 国服行情（OCR 采集）",
     )

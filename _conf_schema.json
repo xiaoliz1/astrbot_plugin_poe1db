@@ -11,6 +11,12 @@
     "hint": "范围 0–60 分钟；0 表示不缓存。",
     "default": 15
   },
+  "max_sources": {
+    "type": "int",
+    "description": "PoE Wiki 搜索资料数量",
+    "hint": "范围 1–8；控制 /poe1search 的候选结果数量，以及问答采用的资料页面数量。",
+    "default": 5
+  },
   "price_notification_enabled": {
     "type": "bool",
     "description": "启用物价自动通知",
